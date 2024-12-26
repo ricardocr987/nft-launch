@@ -18,7 +18,7 @@ import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { readFileSync, readdirSync } from 'fs';
 import { prepareTransaction } from '../src/solana/prepareTransaction';
 import { confirmTransaction } from '../src/solana/confirmTransaction';
-import { createCandyMachine } from '@metaplex-foundation/mpl-core-candy-machine';
+import { createCandyMachine, addConfigLines } from '@metaplex-foundation/mpl-core-candy-machine';
 import path from 'path';
 
 // note: i would do the update on the uri
@@ -103,11 +103,9 @@ async function createSeason() {
       price: 1,
     };
 
+    // TODO: get collection image
     // Read images from media folder
-    const imageBuffers = readImagesFromFolder(seasonConfig.mediaFolderPath);
-
-    // Upload collection image
-    const collectionImageBuffer = imageBuffers[0];
+    const collectionImageBuffer = readImagesFromFolder(seasonConfig.mediaFolderPath)[0];
     const genericFile = createGenericFile(
       new Uint8Array(collectionImageBuffer),
       `${seasonConfig.name}_collection.png`,
@@ -188,45 +186,95 @@ async function createSeason() {
       payer: createNoopSigner(publicKey(config.FILES_KEYPAIR.publicKey))
     });
 
+    // Upload all NFT images and metadata
+    const imageBuffers = readImagesFromFolder(seasonConfig.mediaFolderPath);
+    const nftMetadata = await Promise.all(
+      imageBuffers.map(async (buffer, index) => {
+        // Create and upload image
+        const nftFile = createGenericFile(
+          new Uint8Array(buffer),
+          `${seasonConfig.name}_${index}.png`,
+          { contentType: 'image/png', extension: 'png' }
+        );
+        const [imageUri] = await umi.uploader.upload([nftFile]);
+
+        // Create and upload metadata
+        const uri = await umi.uploader.uploadJson({
+          name: `${seasonConfig.name} #${index + 1}`,
+          symbol: seasonConfig.symbol,
+          description: seasonConfig.description,
+          image: imageUri,
+          seller_fee_basis_points: seasonConfig.sellerFeeBasisPoints,
+          properties: {
+            files: [{ uri: imageUri, type: 'image/png' }],
+            category: 'image',
+            creators: seasonConfig.creators,
+          },
+          attributes: [
+            { trait_type: 'Season', value: '1' },
+            // Add more attributes as needed
+          ],
+        });
+
+        return {
+          name: `${index + 1}`,
+          uri: uri.replace('https://', ''), // Remove prefix if using prefixUri
+        };
+      })
+    );
+
     // Create Candy Machine with USDC payment
     const candyMachineSigner = generateSigner(umi);
     const candyMachineInstructions = await createCandyMachine(umi, {
-        candyMachine: candyMachineSigner,
-        collection: collectionSigner.publicKey,
-        collectionUpdateAuthority: signer,
-        itemsAvailable: seasonConfig.maxSupply,
-        authority: signer.publicKey,
-        isMutable: true,
-        configLineSettings: {
-            prefixName: `${seasonConfig.name} #`,
-            nameLength: 4,
-            prefixUri: `${uri}/`,
-            uriLength: 43,
-            isSequential: true,
-        },
+      candyMachine: candyMachineSigner,
+      collection: collectionSigner.publicKey,
+      collectionUpdateAuthority: signer,
+      itemsAvailable: seasonConfig.maxSupply,
+      authority: signer.publicKey,
+      isMutable: true,
+      configLineSettings: {
+        prefixName: `${seasonConfig.name} #`,
+        nameLength: 4,
+        prefixUri: 'https://',
+        uriLength: 100, // Adjust based on your URI length
+        isSequential: true,
+      },
     });
 
-    // Combine all instructions
-    const instructions = [
+    // Combine collection and candy machine creation instructions
+    const createInstructions = [
       ...collectionInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)),
       ...candyMachineInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)),
     ];
 
-    // Prepare and send transaction
-    const transaction = await prepareTransaction(
-      instructions,
+    // Send creation transaction
+    const createTransaction = await prepareTransaction(
+      createInstructions,
       config.FILES_KEYPAIR.publicKey
     );
+    await confirmTransaction(Buffer.from(createTransaction).toString('base64'));
 
-    // Convert transaction to base64
-    const serializedTransaction = Buffer.from(transaction).toString('base64');
-    
-    // Send and confirm transaction
-    const signature = await confirmTransaction(serializedTransaction);
+    // Add config lines in batches
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < nftMetadata.length; i += BATCH_SIZE) {
+      const batch = nftMetadata.slice(i, i + BATCH_SIZE);
+      const configLineInstructions = addConfigLines(umi, {
+        candyMachine: candyMachineSigner.publicKey,
+        index: i,
+        configLines: batch,
+      });
+
+      const batchTransaction = await prepareTransaction(
+        configLineInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)),
+        config.FILES_KEYPAIR.publicKey
+      );
+      
+      await confirmTransaction(Buffer.from(batchTransaction).toString('base64'));
+      console.log(`Added config lines ${i} to ${i + batch.length}`);
+    }
 
     console.log('Season created successfully!');
     console.log({
-      signature,
       collectionMint: base58.serialize(collectionSigner.publicKey),
       candyMachineMint: base58.serialize(candyMachineSigner.publicKey),
     });
