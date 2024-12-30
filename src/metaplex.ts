@@ -3,31 +3,20 @@ import { Elysia } from "elysia";
 import { config } from "./config";
 import { confirmTransaction } from "./solana/confirmTransaction";
 import { prepareTransaction } from "./solana/prepareTransaction";
-import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { toWeb3JsInstruction, fromWeb3JsKeypair } from "@metaplex-foundation/umi-web3js-adapters";
+import { toWeb3JsInstruction } from "@metaplex-foundation/umi-web3js-adapters";
 import { 
   generateSigner, 
   publicKey, 
   signerIdentity, 
   createNoopSigner, 
-  createSignerFromKeypair 
 } from '@metaplex-foundation/umi';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { dasApi } from '@metaplex-foundation/digital-asset-standard-api';
-import { mplCore } from "@metaplex-foundation/mpl-core";
-import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { rateLimit } from 'elysia-rate-limit';
-import { mintV1, mplCandyMachine } from "@metaplex-foundation/mpl-core-candy-machine";
 import { TokenStandard } from '@metaplex-foundation/mpl-token-metadata';
+import { initializeUmi } from './umi';
+import { mintV1 } from "@metaplex-foundation/mpl-core-candy-machine/dist/src/generated/instructions/mintV1";
 
-// Initialize UMI
-const umi = createUmi(config.RPC.rpcEndpoint)
-    .use(mplCore())
-    .use(dasApi())
-    .use(irysUploader())
-    .use(mplCandyMachine());
-
-umi.use(signerIdentity(createNoopSigner(publicKey('11111111111111111111111111111111'))));
+const umi = initializeUmi(false);
 
 export const metaplexManager = new Elysia({
   prefix: '/metaplex',
@@ -66,9 +55,7 @@ export const metaplexManager = new Elysia({
   })
 
   .post('/mint', async ({ body }: { 
-    body: { 
-      signer: string,
-    }
+    body: { signer: string }
   }) => {
     try {
       const { signer } = body;

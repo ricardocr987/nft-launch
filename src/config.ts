@@ -4,13 +4,19 @@ import bs58 from 'bs58';
 export const config = {
   HOST: process.env.HOST || '127.0.0.1',
   PORT: process.env.PORT || '3001',
-  RPC: new Connection(`https://mainnet.helius-rpc.com/?api-key=${process.env.RPC_KEY!}`),
-  FILES_KEYPAIR: Keypair.fromSecretKey(Buffer.from(bs58.decode(process.env.FILES_KEYPAIR!))),
+  RPC: new Connection(process.env.PROD === 'true' 
+    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.RPC_KEY!}` 
+    : `https://devnet.helius-rpc.com/?api-key=${process.env.RPC_KEY!}`),
+  KEYPAIR: Keypair.fromSecretKey(Buffer.from(bs58.decode(process.env.KEYPAIR!))),
+  RPC_WS_URL: process.env.PROD === 'true' 
+    ? `wss://mainnet.helius-rpc.com/?api-key=${process.env.RPC_KEY!}` 
+    : `wss://devnet.helius-rpc.com/?api-key=${process.env.RPC_KEY!}`
 };
 
 const requiredEnvVariables = [
   'RPC_KEY',
-  'FILES_KEYPAIR',
+  'KEYPAIR',
+  'PROD'
 ];
 
 requiredEnvVariables.forEach(variable => {

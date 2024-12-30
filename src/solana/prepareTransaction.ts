@@ -13,65 +13,46 @@ const MAX_COMPUTE_UNITS = 1_400_000;
 const MIN_LAMPORTS_PER_CU = 10_000;
 const MAX_LAMPORTS_PER_CU = 50_000;
 
-async function getComputeUnits(
+async function simulateWithMaxUnits(
   instructions: TransactionInstruction[],
   payer: PublicKey
-): Promise<{ units: number; error?: string }> {  
-  const tempComputeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+): Promise<number> {
+  const maxComputeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
     units: MAX_COMPUTE_UNITS,
   });
   
-  const tempComputePriceIx = ComputeBudgetProgram.setComputeUnitPrice({
-    microLamports: MIN_LAMPORTS_PER_CU,
-  });
-  
-  const allInstructions = [tempComputePriceIx, tempComputeBudgetIx, ...instructions];
+  const testInstructions = [maxComputeBudgetIx, ...instructions];
+  const recentBlockhash = await config.RPC.getLatestBlockhash('confirmed')
+    .then(res => res.blockhash);
 
   const message = new TransactionMessage({
     payerKey: payer,
-    recentBlockhash: PublicKey.default.toBase58(),
-    instructions: allInstructions,
+    recentBlockhash,
+    instructions: testInstructions,
   }).compileToV0Message();
 
   const transaction = new VersionedTransaction(message);
 
-  const simulateConfig: SimulateTransactionConfig = {
+  const simulation = await config.RPC.simulateTransaction(transaction, {
     replaceRecentBlockhash: true,
     sigVerify: false,
     commitment: "confirmed",
-  };
+  });
 
-  try {
-    const simulation = await config.RPC.simulateTransaction(transaction, simulateConfig);
-
-    if (simulation.value.err) {
-      console.error("Simulation error:", JSON.stringify(simulation.value.err, null, 2));
-      console.log("Simulation logs:", simulation.value.logs);
-      return { units: 0, error: JSON.stringify(simulation.value.err) };
-    }
-
-    const units = simulation.value.unitsConsumed || 0;
-    return { units: Math.ceil(units * 1.1) };
-
-  } catch (error: any) {
-    console.error("Error during simulation:", error);
-    return { units: 0, error: error.toString() };
+  if (simulation.value.err) {
+    console.error("Simulation logs:", simulation.value.logs);
+    throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err, null, 2)}`);
   }
+
+  return simulation.value.unitsConsumed || 0;
 }
 
 async function getPriorityFeeEstimate(
-  priorityLevel: string, 
-  instructions: TransactionInstruction[], 
-  payerKey: PublicKey, 
-  recentBlockhash: string
+  serializedTx: string,
 ): Promise<number> {
-  const message = new TransactionMessage({
-    payerKey,
-    recentBlockhash,
-    instructions,
-  }).compileToV0Message();
-  
-  const transaction = new VersionedTransaction(message);
+  if (config.RPC.rpcEndpoint.includes('devnet')) {
+    return MIN_LAMPORTS_PER_CU;
+  }
 
   try {
     const response = await fetch(config.RPC.rpcEndpoint, {
@@ -81,61 +62,63 @@ async function getPriorityFeeEstimate(
         jsonrpc: "2.0",
         id: "1",
         method: "getPriorityFeeEstimate",
-        params: [
-          {
-            transaction: bs58.encode(transaction.serialize()),
-            options: { priorityLevel },
-          },
-        ],
+        params: [{
+          transaction: serializedTx,
+          options: { recommended: true },
+        }],
       }),
     });
+
     const data = await response.json();
     if (data.error) {
-      console.error("Priority fee estimate error:", data.error);
+      console.warn("Priority fee estimate error:", data.error);
       return MIN_LAMPORTS_PER_CU;
     }
-    return Number(data.result.priorityFeeEstimate);
+
+    const estimate = Number(data.result.priorityFeeEstimate);
+    return Math.min(Math.max(estimate, MIN_LAMPORTS_PER_CU), MAX_LAMPORTS_PER_CU);
   } catch (error) {
-    console.error("Error getting priority fee estimate:", error);
+    console.warn("Error getting priority fee estimate:", error);
     return MIN_LAMPORTS_PER_CU;
   }
 }
 
-export async function prepareTransaction(instructions: TransactionInstruction[], payerKey: PublicKey): Promise<string> {    
+export async function prepareTransaction(
+  instructions: TransactionInstruction[], 
+  payerKey: PublicKey
+): Promise<string> {    
+  // 1. Simulate to get compute units
+  const unitsConsumed = await simulateWithMaxUnits(instructions, payerKey);
+  const computeUnits = Math.ceil(unitsConsumed * 1.1); // Add 10% margin
+
+  // 2. Create test transaction for priority fee estimation
   const recentBlockhash = await config.RPC.getLatestBlockhash('finalized')
-    .then(res => res.blockhash)
-    .catch(err => {
-      console.error("Error getting recent blockhash:", err);
-      throw new Error("Failed to get recent blockhash");
-    });
-  
-  const [computeUnitsResult, microLamports] = await Promise.all([
-    getComputeUnits(instructions, payerKey),
-    getPriorityFeeEstimate('High', instructions, payerKey, recentBlockhash)
-  ]);
+    .then(res => res.blockhash);
 
-  if (computeUnitsResult.error) {
-    console.error(`Simulation error: ${computeUnitsResult.error}`);
-    throw new Error(`Simulation error: ${computeUnitsResult.error}`);
-  }
-
-  const units = computeUnitsResult.units;
-  console.log('units', units);
-  if (units === 0) throw new Error("Failed to estimate compute units");
-  
-  const lamportsPerCu = Math.min(Math.max(microLamports, MIN_LAMPORTS_PER_CU), MAX_LAMPORTS_PER_CU);
-  console.log(`Priority fee estimate: ${lamportsPerCu} lamports per CU`);
-
-  const computePriceInstruction = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: MAX_LAMPORTS_PER_CU });
-  const computeBudgetInstruction = ComputeBudgetProgram.setComputeUnitLimit({ units });
-  const allInstructions = [computePriceInstruction, computeBudgetInstruction, ...instructions];
-
-  const messageV0 = new TransactionMessage({
+  const testMessage = new TransactionMessage({
     payerKey,
     recentBlockhash,
-    instructions: allInstructions,
+    instructions,
   }).compileToV0Message();
-  const transaction = new VersionedTransaction(messageV0);
 
-  return Buffer.from(transaction.serialize()).toString('base64');
+  const testTx = new VersionedTransaction(testMessage);
+  const serializedTestTx = bs58.encode(testTx.serialize());
+
+  // 3. Get priority fee estimate
+  const priorityFee = await getPriorityFeeEstimate(serializedTestTx);
+
+  // 4. Build final transaction with compute budget instructions
+  const computeBudgetIxs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
+  ];
+
+  const finalMessage = new TransactionMessage({
+    payerKey,
+    recentBlockhash,
+    instructions: [...computeBudgetIxs, ...instructions],
+  }).compileToV0Message();
+
+  const finalTx = new VersionedTransaction(finalMessage);
+  return Buffer.from(finalTx.serialize()).toString('base64');
 }
