@@ -16,9 +16,10 @@ export const base64ToGenericFile = (base64String: string, fileName: string): Gen
     });
 };
 
+// note: read images from folder, and sort by number
 export const readImagesFromFolder = (folderPath: string): Buffer[] => {
   const files = readdirSync(folderPath)
-    .filter(file => /\.(jpg|jpeg|png)$/i.test(file))
+    .filter(file => /^\d+\.(jpg|jpeg|png)$/i.test(file))
     .map(file => readFileSync(path.join(folderPath, file)));
   
   if (files.length === 0) {

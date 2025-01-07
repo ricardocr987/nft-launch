@@ -1,45 +1,54 @@
 import { 
-    generateSigner, 
-    publicKey, 
-    createNoopSigner, 
-    createGenericFile,
-    Umi,
-    createSignerFromKeypair
+  publicKey, 
+  createGenericFile,
+  sol,
+  some,
+  dateTime,
+  createSignerFromKeypair,
+  signerIdentity
 } from '@metaplex-foundation/umi';
 import { createCollection, ruleSet } from "@metaplex-foundation/mpl-core";
-import { createCandyMachine, addConfigLines } from '@metaplex-foundation/mpl-core-candy-machine';
+import { addConfigLines, mplCandyMachine, createCandyMachine, createCandyGuard } from '@metaplex-foundation/mpl-core-candy-machine';
+import { findAssociatedTokenPda } from '@metaplex-foundation/mpl-toolbox';
 import { fromWeb3JsKeypair, toWeb3JsInstruction } from '@metaplex-foundation/umi-web3js-adapters';
-import { SeasonConfig } from './types';
+import { SeasonConfig } from '../types';
 import { readImagesFromFolder } from './files';
-import { initializeUmi } from '../../src/umi';
 import { config } from '../../src/config';
+import { USDC_MINT } from '../../src/constants';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
+import { dasApi } from '@metaplex-foundation/digital-asset-standard-api';
+import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 
-const umi = initializeUmi(true);
+const umi = createUmi(config.RPC.rpcEndpoint, 'confirmed').use(mplCandyMachine()).use(dasApi())
+.use(irysUploader());
+const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.KEYPAIR));
+umi.use(signerIdentity(signer));
+
 
 export async function uploadCollectionMetadata(seasonConfig: SeasonConfig) {
-    const collectionImageBuffer = readImagesFromFolder(seasonConfig.mediaFolderPath)[0];
-    const genericFile = createGenericFile(
-        new Uint8Array(collectionImageBuffer),
-        `${seasonConfig.name}_collection.png`,
-        { contentType: 'image/png', extension: 'png' }
-    );
+  const collectionImageBuffer = readImagesFromFolder(seasonConfig.mediaFolderPath)[0];
+  const genericFile = createGenericFile(
+    new Uint8Array(collectionImageBuffer),
+    `collection.png`,
+    { contentType: 'image/png', extension: 'png' }
+  );
 
-    const [imageUri] = await umi.uploader.upload([genericFile]);
-    
-    const uri = await umi.uploader.uploadJson({
-        name: seasonConfig.name,
-        symbol: seasonConfig.symbol,
-        description: seasonConfig.description,
-        image: imageUri,
-        seller_fee_basis_points: seasonConfig.sellerFeeBasisPoints,
-        properties: {
-            files: [{ uri: imageUri, type: 'image/png' }],
-            category: 'image',
-            creators: seasonConfig.creators,
-        },
-    });
+  const [imageUri] = await umi.uploader.upload([genericFile]);
+  
+  const uri = await umi.uploader.uploadJson({
+    name: seasonConfig.name,
+    symbol: seasonConfig.symbol,
+    description: seasonConfig.description,
+    image: imageUri,
+    seller_fee_basis_points: seasonConfig.sellerFeeBasisPoints,
+    properties: {
+      files: [{ uri: imageUri, type: 'image/png' }],
+      category: 'image',
+      creators: seasonConfig.creators,
+    },
+  });
 
-    return { uri, imageUri };
+  return { uri, imageUri };
 }
 
 export async function uploadNFTsMetadata(seasonConfig: SeasonConfig) {
@@ -48,7 +57,7 @@ export async function uploadNFTsMetadata(seasonConfig: SeasonConfig) {
         imageBuffers.map(async (buffer, index) => {
             const nftFile = createGenericFile(
                 new Uint8Array(buffer),
-                `${seasonConfig.name}_${index}.png`,
+                `nft.png`,
                 { contentType: 'image/png', extension: 'png' }
             );
             const [imageUri] = await umi.uploader.upload([nftFile]);
@@ -79,11 +88,6 @@ export async function uploadNFTsMetadata(seasonConfig: SeasonConfig) {
 
 export async function createCoreCandyMachine(seasonConfig: SeasonConfig) {
     const { uri } = await uploadCollectionMetadata(seasonConfig);
-    
-    console.log({
-        collectionMint: seasonConfig.collectionSigner.publicKey,
-        candyMachineMint: seasonConfig.candyMachineSigner.publicKey,
-    });
 
     const collectionInstructions = createCollection(umi, {
       collection: seasonConfig.collectionSigner,
@@ -136,41 +140,112 @@ export async function createCoreCandyMachine(seasonConfig: SeasonConfig) {
         }
       ],
       payer: createSignerFromKeypair(umi, fromWeb3JsKeypair(config.KEYPAIR))
-    });
+    }).getInstructions().map(x => toWeb3JsInstruction(x));
 
-    const candyMachineInstructions = await createCandyMachine(umi, {
+    const candyMachineInstructions = (await createCandyMachine(umi, {
       candyMachine: seasonConfig.candyMachineSigner,
       collection: seasonConfig.collectionSigner.publicKey,
       collectionUpdateAuthority: umi.identity,
       itemsAvailable: seasonConfig.maxSupply,
-      authority: umi.identity.publicKey,
+      maxEditionSupply: 0,
       isMutable: true,
-      configLineSettings: {
-        prefixName: `${seasonConfig.name} #`,
-        nameLength: 4,
-        prefixUri: 'https://',
-        uriLength: 100,
-        isSequential: true,
-      },
-    });
+      configLineSettings: some({
+          prefixName: `${seasonConfig.name} #`,
+          nameLength: 4,
+          prefixUri: 'https://',
+          uriLength: 100,
+          isSequential: false,
+      }),
+    })).getInstructions().map(x => toWeb3JsInstruction(x));
+
+    const candyGuardInstructions = createCandyGuard(umi as any, {
+      base: seasonConfig.candyGuardSigner,
+      guards: {
+        botTax: some({ lamports: sol(0.01), lastInstruction: true }),
+        startDate: some({ 
+            date: dateTime(seasonConfig.startDate.toISOString()) 
+        }),
+        endDate: some({ 
+            date: dateTime(seasonConfig.endDate.toISOString()) 
+        }),
+        mintLimit: some({ id: 1, limit: 2 }),
+        redeemLimit: some({ maximum: seasonConfig.maxSupply }),
+        tokenPayment: some({
+            amount: Number(seasonConfig.price),
+            mint: publicKey(USDC_MINT),
+            destinationAta: findAssociatedTokenPda(umi, {
+                mint: publicKey(USDC_MINT),
+                owner: umi.identity.publicKey,
+            })[0],
+        }),
+      }
+      /*
+       groups: [
+          {
+            // First group for VIPs.
+            label: 'VIP',
+            guards: {
+              startDate: some({ date: '2022-09-05T16:00:00.000Z' }),
+              allowList: some({ merkleRoot }),
+              solPayment: some({
+                lamports: sol(1),
+                destination: solDestination,
+              }),
+            },
+          },
+          {
+            // Second group for whitelist token holders.
+            label: 'WLIST',
+            guards: {
+              startDate: some({ date: '2022-09-05T18:00:00.000Z' }),
+              tokenGate: some({ mint: tokenGateMint, amount: 1 }),
+              solPayment: some({
+                lamports: sol(2),
+                destination: solDestination,
+              }),
+            },
+          },
+          {
+            // Third group for the public.
+            label: 'PUBLIC',
+            guards: {
+              startDate: some({ date: '2022-09-05T20:00:00.000Z' }),
+              gatekeeper: some({ gatekeeperNetwork, expireOnUse: false }),
+              solPayment: some({
+                lamports: sol(3),
+                destination: solDestination,
+              }),
+            },
+          },
+        ],
+      */
+    }).getInstructions().map(x => toWeb3JsInstruction(x));
 
     return {
-      collectionInstructions: collectionInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)),
-      candyMachineInstructions: candyMachineInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)),
+      collectionInstructions,
+      candyMachineInstructions,
+      candyGuardInstructions
     };
 }
 
-export async function getBatchedConfigLines(nftMetadata: any[], batchSize = 50) {
-  const batches = [];
-  for (let i = 0; i < nftMetadata.length; i += batchSize) {
-    const batch = nftMetadata.slice(i, i + batchSize);
-    const configLineInstructions = addConfigLines(umi, {
-      candyMachine: umi.identity.publicKey,
-      index: i,
-      configLines: batch,
-    });
+export async function getBatchedConfigLines(
+    seasonConfig: SeasonConfig,
+    nftMetadata: { name: string; uri: string }[], 
+    batchSize = 2
+) {
+    const batches = [];
+    for (let i = 0; i < nftMetadata.length; i += batchSize) {
+        const batch = nftMetadata.slice(i, i + batchSize);
+        const configLineInstructions = addConfigLines(umi, {
+            candyMachine: seasonConfig.candyMachineSigner.publicKey,
+            index: i,
+            configLines: batch.map(meta => ({
+                name: meta.name,
+                uri: meta.uri.replace('https://', '')
+            })),
+        });
 
-    batches.push(configLineInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)));
-  }
-  return batches;
+        batches.push(configLineInstructions.getInstructions().map(ix => toWeb3JsInstruction(ix)));
+    }
+    return batches;
 }

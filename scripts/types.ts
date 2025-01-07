@@ -15,7 +15,8 @@ export interface SeasonConfig {
   paymentMint: string;
   startDate: Date;
   endDate: Date;
-  price: number;
+  price: BigInt;
   collectionSigner: KeypairSigner;
   candyMachineSigner: KeypairSigner;
+  candyGuardSigner: KeypairSigner;
 } 

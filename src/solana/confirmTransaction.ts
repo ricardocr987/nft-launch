@@ -47,6 +47,7 @@ async function pollTransaction(signature: string): Promise<string> {
     const status = await checkTransactionStatus(signature);
     
     if (status.confirmed) {
+      console.log('Transaction confirmed', signature);
       return signature;
     }
     

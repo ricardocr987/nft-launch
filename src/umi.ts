@@ -9,11 +9,11 @@ import { config } from './config';
 
 export function initializeUmi(useConfig: boolean = true) {
   const umi = createUmi(config.RPC.rpcEndpoint, 'confirmed')
+    .use(mplCandyMachine())
     .use(mplCore())
     .use(dasApi())
-    .use(irysUploader())
-    .use(mplCandyMachine());
-
+    .use(irysUploader());
+  
   if (useConfig) {
     const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.KEYPAIR));
     umi.use(signerIdentity(signer));
