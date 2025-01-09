@@ -12,6 +12,7 @@ import { VersionedTransaction } from '@solana/web3.js';
 import { generateSigner } from '@metaplex-foundation/umi';
 import { initializeUmi } from '../src/umi';
 import { toWeb3JsKeypair } from '@metaplex-foundation/umi-web3js-adapters';
+import { USDC_MINT } from '../src/constants';
 
 // fix 3rd step to fix mint, better management of nft files
 async function createSeason() {
@@ -33,19 +34,16 @@ async function createSeason() {
             ],
             royaltyBasisPoints: 500,
             sellerFeeBasisPoints: 500,
-            paymentMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             startDate: new Date(),
             endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             price: onChainUsdcPrice,
             collectionSigner: generateSigner(umi),
             candyMachineSigner: generateSigner(umi),
-            candyGuardSigner: generateSigner(umi)
         };
 
         console.log({
             collection: seasonConfig.collectionSigner.publicKey,
             candyMachine: seasonConfig.candyMachineSigner.publicKey,
-            candyGuard: seasonConfig.candyGuardSigner.publicKey
         });
 
         // Step 1: Upload all metadata
@@ -56,7 +54,12 @@ async function createSeason() {
         ]);
 
         // Step 2: Create Candy Machine and Collection
-        const { collectionInstructions, candyMachineInstructions, candyGuardInstructions } = await createCoreCandyMachine(seasonConfig);
+        const { 
+            collectionInstructions, 
+            candyMachineInstructions, 
+            candyGuardInstructions,
+            wrapInstructions
+        } = await createCoreCandyMachine(seasonConfig);
         const base64CollectionTransaction = await prepareTransaction(
             collectionInstructions,
             config.KEYPAIR.publicKey
@@ -69,13 +72,12 @@ async function createSeason() {
         console.log('Collection created successfully!');
 
         const base64CandyMachineTransaction = await prepareTransaction(
-            [...candyMachineInstructions, ...candyGuardInstructions],
+            [...candyMachineInstructions, ...candyGuardInstructions, ...wrapInstructions],
             config.KEYPAIR.publicKey
         );
         const candyMachineTransaction = VersionedTransaction.deserialize(Buffer.from(base64CandyMachineTransaction, "base64"));
         candyMachineTransaction.sign([config.KEYPAIR]);
         candyMachineTransaction.sign([toWeb3JsKeypair(seasonConfig.candyMachineSigner)]);
-        candyMachineTransaction.sign([toWeb3JsKeypair(seasonConfig.candyGuardSigner)])
         const signedCandyMachineTransaction = candyMachineTransaction.serialize();
         await confirmTransaction(Buffer.from(signedCandyMachineTransaction).toString('base64'));
         console.log('Candy Machine created successfully!');
@@ -104,9 +106,8 @@ async function createSeason() {
         console.log('----------------------------------------');
         console.log(`bun run scripts/mintNft.ts \\
     ${seasonConfig.candyMachineSigner.publicKey} \\
-    ${seasonConfig.collectionSigner.publicKey} \\
-    ${seasonConfig.candyGuardSigner.publicKey}`);
-        console.log('----------------------------------------');
+    ${seasonConfig.collectionSigner.publicKey}`);
+    console.log('----------------------------------------');
 
     } catch (error) {
         console.error('Error creating season:', error);

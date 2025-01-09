@@ -11,22 +11,28 @@ import { setComputeUnitLimit } from '@metaplex-foundation/mpl-toolbox';
 import { some } from '@metaplex-foundation/umi';
 import { USDC_MINT } from '../src/constants';
 import { toWeb3JsPublicKey } from '@metaplex-foundation/umi-web3js-adapters';
-import { PublicKey } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { PublicKey } from '@solana/web3.js';
 
 async function mintNft(
     candyMachineId: string,
     collectionMint: string,
-    candyGuard: string
 ) {
     try {
-        const umi = initializeUmi(true);
-        
-        // Fetch candy machine data first
+        const umi = initializeUmi(true, true);        
         const candyMachine = await fetchCandyMachine(umi, publicKey(candyMachineId));
-        const candyGuardPda = findCandyGuardPda(umi, { base: publicKey(candyGuard) });
+        const candyGuardPda = findCandyGuardPda(umi, { base: publicKey(candyMachineId) });
+        const candyGuard = await fetchCandyGuard(umi as any, candyGuardPda);
 
-        // Check if candy machine is ready
+        console.log(candyMachine.mintAuthority, candyGuard.publicKey)
+        if (candyMachine.itemsLoaded === 0) {
+            throw new Error('No items loaded in the candy machine');
+        }
+
+        if (candyMachine.itemsRedeemed >= candyMachine.data.itemsAvailable) {
+            throw new Error('All items have been minted');
+        }
+
         if (candyMachine.itemsLoaded < candyMachine.data.itemsAvailable) {
             throw new Error(
                 `Candy Machine not fully loaded. ${candyMachine.itemsLoaded}/${candyMachine.data.itemsAvailable} items loaded`
@@ -40,10 +46,15 @@ async function mintNft(
             candyMachine: candyMachineId,
             nftMint: nftMint.publicKey,
             collectionMint,
-            candyGuard
+            itemsLoaded: candyMachine.itemsLoaded,
+            itemsMinted: candyMachine.itemsRedeemed,
+            itemsAvailable: candyMachine.data.itemsAvailable,
         });
 
-        const destinationAta = getAssociatedTokenAddressSync(USDC_MINT, toWeb3JsPublicKey(umi.identity.publicKey));
+        const destinationAta = getAssociatedTokenAddressSync(
+            USDC_MINT, 
+            new PublicKey('rikiFB2VznT2izUT7UffzWCn1X4gNmGutX7XEqFdpRR')
+        );
 
         const tx = transactionBuilder()
             .add(setComputeUnitLimit(umi, { units: 800_000 }))
@@ -53,10 +64,11 @@ async function mintNft(
                     asset: nftMint,
                     collection: publicKey(collectionMint),
                     minter: umi.identity,
-                    candyGuard: candyGuardPda,
+                    candyGuard: candyGuardPda[0],
                     mintArgs: {
                         tokenPayment: some({ mint: publicKey(USDC_MINT), destinationAta: publicKey(destinationAta) }),
-                    }
+                    },
+                    payer: umi.identity,
                 })
             );
 
@@ -79,14 +91,13 @@ async function mintNft(
 if (require.main === module) {
     const candyMachineId = process.argv[2];
     const collectionMint = process.argv[3];
-    const candyGuard = process.argv[4];
 
-    if (!candyMachineId || !collectionMint || !candyGuard) {
-        console.error('Usage: bun run scripts/mintNft.ts <candyMachineId> <collectionMint> <candyGuard>');
+    if (!candyMachineId || !collectionMint) {
+        console.error('Usage: bun run scripts/mintNft.ts <candyMachineId> <collectionMint>');
         process.exit(1);
     }
 
-    mintNft(candyMachineId, collectionMint, candyGuard)
+    mintNft(candyMachineId, collectionMint)
         .then(() => process.exit(0))
         .catch((error) => {
             console.error(error);

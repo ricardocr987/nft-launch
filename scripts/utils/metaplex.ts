@@ -5,10 +5,10 @@ import {
   some,
   dateTime,
   createSignerFromKeypair,
-  signerIdentity
+  signerIdentity,
 } from '@metaplex-foundation/umi';
 import { createCollection, ruleSet } from "@metaplex-foundation/mpl-core";
-import { addConfigLines, mplCandyMachine, createCandyMachine, createCandyGuard } from '@metaplex-foundation/mpl-core-candy-machine';
+import { addConfigLines, mplCandyMachine, createCandyMachine, createCandyGuard, findCandyGuardPda, setMintAuthority, wrap } from '@metaplex-foundation/mpl-core-candy-machine';
 import { findAssociatedTokenPda } from '@metaplex-foundation/mpl-toolbox';
 import { fromWeb3JsKeypair, toWeb3JsInstruction } from '@metaplex-foundation/umi-web3js-adapters';
 import { SeasonConfig } from '../types';
@@ -18,12 +18,11 @@ import { USDC_MINT } from '../../src/constants';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { dasApi } from '@metaplex-foundation/digital-asset-standard-api';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
-
+ 
 const umi = createUmi(config.RPC.rpcEndpoint, 'confirmed').use(mplCandyMachine()).use(dasApi())
 .use(irysUploader());
 const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.KEYPAIR));
 umi.use(signerIdentity(signer));
-
 
 export async function uploadCollectionMetadata(seasonConfig: SeasonConfig) {
   const collectionImageBuffer = readImagesFromFolder(seasonConfig.mediaFolderPath)[0];
@@ -159,17 +158,14 @@ export async function createCoreCandyMachine(seasonConfig: SeasonConfig) {
     })).getInstructions().map(x => toWeb3JsInstruction(x));
 
     const candyGuardInstructions = createCandyGuard(umi as any, {
-      base: seasonConfig.candyGuardSigner,
+      base: seasonConfig.candyMachineSigner,
       guards: {
-        botTax: some({ lamports: sol(0.01), lastInstruction: true }),
         startDate: some({ 
             date: dateTime(seasonConfig.startDate.toISOString()) 
         }),
         endDate: some({ 
             date: dateTime(seasonConfig.endDate.toISOString()) 
         }),
-        mintLimit: some({ id: 1, limit: 2 }),
-        redeemLimit: some({ maximum: seasonConfig.maxSupply }),
         tokenPayment: some({
             amount: Number(seasonConfig.price),
             mint: publicKey(USDC_MINT),
@@ -221,10 +217,20 @@ export async function createCoreCandyMachine(seasonConfig: SeasonConfig) {
       */
     }).getInstructions().map(x => toWeb3JsInstruction(x));
 
+    const candyGuardPda = findCandyGuardPda(umi, { base: seasonConfig.candyMachineSigner.publicKey });
+
+    const wrapInstructions = wrap(umi, {
+        candyGuard: candyGuardPda[0],
+        authority: umi.identity,
+        candyMachine: seasonConfig.candyMachineSigner.publicKey,
+        candyMachineAuthority: umi.identity,
+    }).getInstructions().map(x => toWeb3JsInstruction(x));
+
     return {
-      collectionInstructions,
-      candyMachineInstructions,
-      candyGuardInstructions
+        collectionInstructions,
+        candyMachineInstructions,
+        candyGuardInstructions,
+        wrapInstructions
     };
 }
 

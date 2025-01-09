@@ -7,7 +7,7 @@ import { createNoopSigner, createSignerFromKeypair, publicKey, signerIdentity } 
 import { fromWeb3JsKeypair } from "@metaplex-foundation/umi-web3js-adapters";
 import { config } from './config';
 
-export function initializeUmi(useConfig: boolean = true) {
+export function initializeUmi(useConfig: boolean = true, minter: boolean = false) {
   const umi = createUmi(config.RPC.rpcEndpoint, 'confirmed')
     .use(mplCandyMachine())
     .use(mplCore())
@@ -18,7 +18,13 @@ export function initializeUmi(useConfig: boolean = true) {
     const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.KEYPAIR));
     umi.use(signerIdentity(signer));
   } else {
-    umi.use(signerIdentity(createNoopSigner(publicKey('11111111111111111111111111111111'))));
+    if (minter) {
+      const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.MINTER));
+      console.log(signer.publicKey)
+      umi.use(signerIdentity(signer));
+    } else {
+      umi.use(signerIdentity(createNoopSigner(publicKey('11111111111111111111111111111111'))));
+    }
   }
 
   return umi;

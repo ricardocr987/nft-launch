@@ -12,11 +12,9 @@ export interface SeasonConfig {
   }>;
   royaltyBasisPoints: number;
   sellerFeeBasisPoints: number;
-  paymentMint: string;
   startDate: Date;
   endDate: Date;
   price: BigInt;
   collectionSigner: KeypairSigner;
   candyMachineSigner: KeypairSigner;
-  candyGuardSigner: KeypairSigner;
 } 
