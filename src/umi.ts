@@ -19,7 +19,7 @@ export function initializeUmi(useConfig: boolean = true, minter: boolean = false
     umi.use(signerIdentity(signer));
   } else {
     if (minter) {
-      const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.MINTER));
+      const signer = createSignerFromKeypair(umi, fromWeb3JsKeypair(config.KEYPAIR));
       console.log(signer.publicKey)
       umi.use(signerIdentity(signer));
     } else {

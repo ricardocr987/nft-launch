@@ -66,7 +66,7 @@ async function mintNft(
                     minter: umi.identity,
                     candyGuard: candyGuardPda[0],
                     mintArgs: {
-                        tokenPayment: some({ mint: publicKey(USDC_MINT), destinationAta: publicKey(destinationAta) }),
+                        tokenPayment: some({ mint: publicKey(USDC_MINT), destinationAta: publicKey(destinationAta), amount: BigInt(1) * BigInt(10 ** 6) }),
                     },
                     payer: umi.identity,
                 })
